@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -e
+
+source ./net_utils.sh
+require_root
+
+NETMASK="255.255.255.0"
+NIX_FILE="/etc/nixos/dhcp-dnsmasq.nix"
+MAIN_CFG="/etc/nixos/configuration.nix"
+
+read -rp "Scope: " SCOPE
+read -rp "IP inicial: " IP_START
+valid_ipv4 "$IP_START" || die "IP inicial inválida"
+
+read -rp "IP final: " IP_END
+valid_ipv4 "$IP_END" || die "IP final inválida"
+
+read -rp "Lease (horas): " LEASE
+read -rp "Gateway: " GATEWAY
+valid_ipv4 "$GATEWAY" || die "Gateway inválido"
+
+read -rp "DNS: " DNS
+valid_ipv4 "$DNS" || die "DNS inválido"
+
+cat > "$NIX_FILE" <<EOF
+{ config, pkgs, ... }:
+{
+  services.dnsmasq = {
+    enable = true;
+    settings = {
+      interface = "ens37";
+      bind-interfaces = true;
+      dhcp-range = "$IP_START,$IP_END,$NETMASK,${LEASE}h";
+      dhcp-option = [ "3,$GATEWAY" "6,$DNS" ];
+      port = 0;
+    };
+  };
+
+  networking.firewall.allowedUDPPorts = [ 67 ];
+}
+EOF
+
+grep -q "dhcp-dnsmasq.nix" "$MAIN_CFG" || \
+sed -i '/imports = \[/a\  ./dhcp-dnsmasq.nix' "$MAIN_CFG"
+
+nixos-rebuild switch
+
+systemctl status dnsmasq --no-pager
+journalctl -u dnsmasq -n 10 | grep DHCP || true
